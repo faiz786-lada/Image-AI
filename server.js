@@ -203,7 +203,8 @@ app.get('*', (req, res) => {
     }
     
     // If no index.html found, send simple response
-    res.send(`
+    const origin = req.headers.origin || 'Direct Access';
+    const html = `
         <!DOCTYPE html>
         <html>
         <head>
@@ -266,8 +267,8 @@ app.get('*', (req, res) => {
                 <h1>🚀 Cyber Image Generator API</h1>
                 <div class="status">✅ Backend Server Running</div>
                 
-                <div class="origin">
-                    <strong>Current Origin:</strong> ${req.headers.origin || 'Direct Access'}
+                <div class="origin" id="originInfo">
+                    <strong>Current Origin:</strong> ${origin}
                 </div>
                 
                 <p>This is the backend API server. Frontend is hosted separately.</p>
@@ -314,16 +315,18 @@ app.get('*', (req, res) => {
                     .then(res => res.json())
                     .then(data => {
                         console.log('API Health:', data);
-                        const originDiv = document.querySelector('.origin');
+                        const originDiv = document.getElementById('originInfo');
                         if (originDiv) {
-                            originDiv.innerHTML += `<br><small>API Status: ${data.status}</small>`;
+                            originDiv.innerHTML += '<br><small>API Status: ' + data.status + '</small>';
                         }
                     })
                     .catch(err => console.error('Health check failed:', err));
             </script>
         </body>
         </html>
-    `);
+    `;
+    
+    res.send(html);
 });
 
 // Start server
