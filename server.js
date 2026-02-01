@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -11,27 +10,49 @@ const PORT = process.env.PORT || 10000;
 app.use(cors());
 app.use(express.json());
 
-// API Key
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "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";
+// Get API key from environment variables
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 
-// Serve frontend files if they exist
-app.use(express.static(path.join(__dirname, 'frontend')));
+// Validate API key on startup
+if (!OPENROUTER_API_KEY) {
+    console.error('❌ ERROR: OPENROUTER_API_KEY is not set in environment variables');
+    console.error('Please set it in Render.com environment variables');
+    process.exit(1);
+}
 
-// Health check
+console.log('✅ API Key loaded from environment variables');
+
+// Health check endpoint
 app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'ok',
-        message: 'Cyber Image Generator API is running',
-        timestamp: new Date().toISOString()
+        service: 'Cyber Image Generator API',
+        environment: process.env.NODE_ENV || 'development',
+        // NEVER expose API key here
     });
 });
 
-// Generate image
+// Generate image endpoint
 app.post('/api/generate-image', async (req, res) => {
     try {
         const { prompt, model } = req.body;
         
-        console.log('Generating image for:', prompt.substring(0, 100));
+        // Input validation
+        if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Valid prompt is required' 
+            });
+        }
+        
+        if (prompt.length > 1000) {
+            return res.status(400).json({ 
+                success: false,
+                error: 'Prompt too long (max 1000 characters)' 
+            });
+        }
+        
+        console.log(`📸 Generating image - Prompt: ${prompt.substring(0, 50)}...`);
         
         const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
             model: model || "black-forest-labs/flux.2-klein-4b",
@@ -43,9 +64,7 @@ app.post('/api/generate-image', async (req, res) => {
         }, {
             headers: {
                 'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'https://cyber-image.onrender.com',
-                'X-Title': 'Cyber Image Generator'
+                'Content-Type': 'application/json'
             }
         });
         
@@ -57,27 +76,44 @@ app.post('/api/generate-image', async (req, res) => {
             res.json({
                 success: true,
                 images: images.map(img => ({ url: img.image_url.url })),
-                prompt: prompt,
-                model: model || "black-forest-labs/flux.2-klein-4b"
+                prompt: prompt
             });
+            
+            console.log('✅ Image generated successfully');
         } else {
-            res.status(500).json({ error: 'No image generated' });
+            throw new Error('No images generated');
         }
     } catch (error) {
-        console.error('Error:', error.message);
+        console.error('❌ Error:', error.message);
+        
+        // Don't expose API errors to client
         res.status(500).json({ 
-            error: 'Failed to generate image',
-            details: error.message 
+            success: false,
+            error: 'Failed to generate image. Please try again.'
         });
     }
 });
 
-// Serve frontend
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'frontend', 'index.html'));
+// Root endpoint
+app.get('/', (req, res) => {
+    res.json({
+        service: 'Cyber Image Generator API',
+        version: '1.0.0',
+        endpoints: {
+            health: '/api/health',
+            generate: '/api/generate-image'
+        }
+    });
 });
 
+// Start server
 app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`🌐 http://localhost:${PORT}`);
+    console.log(`
+    🚀 Cyber Image Generator API
+    ==============================
+    ✅ Server running on port: ${PORT}
+    ✅ Environment: ${process.env.NODE_ENV || 'development'}
+    ✅ Health check: http://localhost:${PORT}/api/health
+    ==============================
+    `);
 });
