@@ -1,14 +1,14 @@
 const express = require('express');
 const cors = require('cors');
+const axios = require('axios');
 require('dotenv').config();
-const { OpenRouter } = require('@openrouter/sdk');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    origin: process.env.FRONTEND_URL || '*',
     credentials: true
 }));
 app.use(express.json());
@@ -47,41 +47,13 @@ const validateRequest = (req, res, next) => {
         });
     }
     
-    // Basic profanity/content filter
-    const blockedTerms = [
-        'hate speech',
-        'violence',
-        // Add more terms as needed
-    ];
-    
-    const lowerPrompt = prompt.toLowerCase();
-    for (const term of blockedTerms) {
-        if (lowerPrompt.includes(term)) {
-            return res.status(400).json({ 
-                error: 'Prompt contains restricted content',
-                code: 'CONTENT_VIOLATION'
-            });
-        }
-    }
-    
     next();
 };
 
-// Initialize OpenRouter
-let openrouter;
-try {
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-        throw new Error('OPENROUTER_API_KEY is not set in environment variables');
-    }
-    
-    openrouter = new OpenRouter({
-        apiKey: apiKey
-    });
-    
-    console.log('✅ OpenRouter initialized successfully');
-} catch (error) {
-    console.error('❌ Failed to initialize OpenRouter:', error.message);
+// OpenRouter API configuration
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+if (!OPENROUTER_API_KEY) {
+    console.error('❌ OPENROUTER_API_KEY is not set in environment variables');
     process.exit(1);
 }
 
@@ -103,37 +75,51 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+// Model mapping
+const MODEL_MAP = {
+    'black-forest-labs/flux.2-klein-4b': 'Cyber Flux Pro',
+    'black-forest-labs/flux.1.1-pro': 'Secure Vision',
+    'stabilityai/stable-diffusion-3.5-large': 'Quantum Render'
+};
+
 // Generate image endpoint with validation
 app.post('/api/generate-image', validateRequest, async (req, res) => {
     try {
         const { prompt, model } = req.body;
+        const selectedModel = model || "black-forest-labs/flux.2-klein-4b";
         
-        // Log request (without exposing sensitive info)
-        console.log(`📸 Image generation requested - Prompt length: ${prompt.length}, Model: ${model || 'default'}`);
+        console.log(`📸 Image generation requested - Prompt length: ${prompt.length}, Model: ${selectedModel}`);
         
-        const result = await openrouter.chat.send({
-            model: model || "black-forest-labs/flux.2-klein-4b",
+        const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+            model: selectedModel,
             messages: [{
                 role: "user",
                 content: prompt
             }],
-            modalities: ["image"],
-            provider: {
-                "sort": "throughput"
+            modalities: ["image"]
+        }, {
+            headers: {
+                'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+                'Content-Type': 'application/json',
+                'HTTP-Referer': process.env.FRONTEND_URL || 'http://localhost:3000',
+                'X-Title': 'Cyber Image Generator'
             }
         });
         
-        const message = result.choices[0].message;
+        const result = response.data;
         
-        if (message.images && message.images.length > 0) {
+        if (result.choices && result.choices[0] && result.choices[0].message && result.choices[0].message.images) {
+            const images = result.choices[0].message.images;
+            
             res.json({
                 success: true,
-                images: message.images.map((img, index) => ({ 
+                images: images.map((img, index) => ({ 
                     url: img.image_url.url,
                     index: index + 1
                 })),
                 prompt: prompt,
-                model: model || "black-forest-labs/flux.2-klein-4b",
+                model: selectedModel,
+                modelName: MODEL_MAP[selectedModel] || selectedModel,
                 generatedAt: new Date().toISOString()
             });
             
@@ -148,15 +134,25 @@ app.post('/api/generate-image', validateRequest, async (req, res) => {
         let errorMessage = 'Failed to generate image';
         let statusCode = 500;
         
-        if (error.message.includes('API key') || error.message.includes('authentication')) {
-            errorMessage = 'Service authentication error';
+        if (error.response) {
+            // The request was made and the server responded with a status code
+            // that falls out of the range of 2xx
+            console.error('Response error:', error.response.data);
+            
+            if (error.response.status === 401) {
+                errorMessage = 'Service authentication error';
+                statusCode = 503;
+            } else if (error.response.status === 429) {
+                errorMessage = 'Service temporarily unavailable. Please try again later.';
+                statusCode = 429;
+            } else if (error.response.status === 400) {
+                errorMessage = error.response.data.error?.message || 'Invalid request';
+                statusCode = 400;
+            }
+        } else if (error.request) {
+            // The request was made but no response was received
+            errorMessage = 'No response from AI service';
             statusCode = 503;
-        } else if (error.message.includes('rate limit') || error.message.includes('quota')) {
-            errorMessage = 'Service temporarily unavailable. Please try again later.';
-            statusCode = 429;
-        } else if (error.message.includes('content policy')) {
-            errorMessage = 'Prompt violates content policy';
-            statusCode = 400;
         }
         
         res.status(statusCode).json({ 
@@ -173,19 +169,19 @@ app.get('/api/models', (req, res) => {
         success: true,
         models: [
             {
-                id: "flux-pro",
+                id: "black-forest-labs/flux.2-klein-4b",
                 name: "Cyber Flux Pro",
                 description: "High-quality image generation",
                 maxPromptLength: 500
             },
             {
-                id: "secure-vision",
+                id: "black-forest-labs/flux.1.1-pro",
                 name: "Secure Vision",
                 description: "Enhanced detail and clarity",
                 maxPromptLength: 500
             },
             {
-                id: "quantum-render",
+                id: "stabilityai/stable-diffusion-3.5-large",
                 name: "Quantum Render",
                 description: "Advanced rendering technology",
                 maxPromptLength: 500
