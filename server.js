@@ -1,97 +1,40 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000;
 
 // Middleware
-app.use(cors({
-    origin: process.env.FRONTEND_URL || '*',
-    credentials: true
-}));
+app.use(cors());
 app.use(express.json());
 
-// Rate limiting middleware
-const rateLimit = require('express-rate-limit');
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 50, // limit each IP to 50 requests per windowMs
-    message: 'Too many requests from this IP, please try again later.'
-});
-app.use('/api/generate-image', limiter);
+// API Key
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "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";
 
-// Request validation middleware
-const validateRequest = (req, res, next) => {
-    const { prompt } = req.body;
-    
-    if (!prompt || typeof prompt !== 'string') {
-        return res.status(400).json({ 
-            error: 'Valid prompt is required',
-            code: 'INVALID_PROMPT'
-        });
-    }
-    
-    if (prompt.trim().length === 0) {
-        return res.status(400).json({ 
-            error: 'Prompt cannot be empty',
-            code: 'EMPTY_PROMPT'
-        });
-    }
-    
-    if (prompt.length > 1000) {
-        return res.status(400).json({ 
-            error: 'Prompt too long (max 1000 characters)',
-            code: 'PROMPT_TOO_LONG'
-        });
-    }
-    
-    next();
-};
+// Serve frontend files if they exist
+app.use(express.static(path.join(__dirname, 'frontend')));
 
-// OpenRouter API configuration
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-if (!OPENROUTER_API_KEY) {
-    console.error('❌ OPENROUTER_API_KEY is not set in environment variables');
-    process.exit(1);
-}
-
-// Security headers middleware
-app.use((req, res, next) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('X-XSS-Protection', '1; mode=block');
-    next();
-});
-
-// Health check endpoint
+// Health check
 app.get('/api/health', (req, res) => {
     res.json({ 
         status: 'ok',
-        service: 'Cyber Image Generator API',
-        version: '1.0.0',
-        environment: process.env.NODE_ENV || 'development'
+        message: 'Cyber Image Generator API is running',
+        timestamp: new Date().toISOString()
     });
 });
 
-// Model mapping
-const MODEL_MAP = {
-    'black-forest-labs/flux.2-klein-4b': 'Cyber Flux Pro',
-    'black-forest-labs/flux.1.1-pro': 'Secure Vision',
-    'stabilityai/stable-diffusion-3.5-large': 'Quantum Render'
-};
-
-// Generate image endpoint with validation
-app.post('/api/generate-image', validateRequest, async (req, res) => {
+// Generate image
+app.post('/api/generate-image', async (req, res) => {
     try {
         const { prompt, model } = req.body;
-        const selectedModel = model || "black-forest-labs/flux.2-klein-4b";
         
-        console.log(`📸 Image generation requested - Prompt length: ${prompt.length}, Model: ${selectedModel}`);
+        console.log('Generating image for:', prompt.substring(0, 100));
         
         const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-            model: selectedModel,
+            model: model || "black-forest-labs/flux.2-klein-4b",
             messages: [{
                 role: "user",
                 content: prompt
@@ -101,132 +44,40 @@ app.post('/api/generate-image', validateRequest, async (req, res) => {
             headers: {
                 'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
                 'Content-Type': 'application/json',
-                'HTTP-Referer': process.env.FRONTEND_URL || 'http://localhost:3000',
+                'HTTP-Referer': 'https://cyber-image.onrender.com',
                 'X-Title': 'Cyber Image Generator'
             }
         });
         
-        const result = response.data;
+        const data = response.data;
         
-        if (result.choices && result.choices[0] && result.choices[0].message && result.choices[0].message.images) {
-            const images = result.choices[0].message.images;
+        if (data.choices && data.choices[0].message.images) {
+            const images = data.choices[0].message.images;
             
             res.json({
                 success: true,
-                images: images.map((img, index) => ({ 
-                    url: img.image_url.url,
-                    index: index + 1
-                })),
+                images: images.map(img => ({ url: img.image_url.url })),
                 prompt: prompt,
-                model: selectedModel,
-                modelName: MODEL_MAP[selectedModel] || selectedModel,
-                generatedAt: new Date().toISOString()
+                model: model || "black-forest-labs/flux.2-klein-4b"
             });
-            
-            console.log(`✅ Image generated successfully`);
         } else {
-            throw new Error('No images generated by AI');
+            res.status(500).json({ error: 'No image generated' });
         }
     } catch (error) {
-        console.error('❌ Image generation error:', error.message);
-        
-        // User-friendly error messages
-        let errorMessage = 'Failed to generate image';
-        let statusCode = 500;
-        
-        if (error.response) {
-            // The request was made and the server responded with a status code
-            // that falls out of the range of 2xx
-            console.error('Response error:', error.response.data);
-            
-            if (error.response.status === 401) {
-                errorMessage = 'Service authentication error';
-                statusCode = 503;
-            } else if (error.response.status === 429) {
-                errorMessage = 'Service temporarily unavailable. Please try again later.';
-                statusCode = 429;
-            } else if (error.response.status === 400) {
-                errorMessage = error.response.data.error?.message || 'Invalid request';
-                statusCode = 400;
-            }
-        } else if (error.request) {
-            // The request was made but no response was received
-            errorMessage = 'No response from AI service';
-            statusCode = 503;
-        }
-        
-        res.status(statusCode).json({ 
-            success: false,
-            error: errorMessage,
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        console.error('Error:', error.message);
+        res.status(500).json({ 
+            error: 'Failed to generate image',
+            details: error.message 
         });
     }
 });
 
-// Available models endpoint
-app.get('/api/models', (req, res) => {
-    res.json({
-        success: true,
-        models: [
-            {
-                id: "black-forest-labs/flux.2-klein-4b",
-                name: "Cyber Flux Pro",
-                description: "High-quality image generation",
-                maxPromptLength: 500
-            },
-            {
-                id: "black-forest-labs/flux.1.1-pro",
-                name: "Secure Vision",
-                description: "Enhanced detail and clarity",
-                maxPromptLength: 500
-            },
-            {
-                id: "stabilityai/stable-diffusion-3.5-large",
-                name: "Quantum Render",
-                description: "Advanced rendering technology",
-                maxPromptLength: 500
-            }
-        ]
-    });
+// Serve frontend
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'frontend', 'index.html'));
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-    console.error('🚨 Server error:', err.stack);
-    res.status(500).json({
-        success: false,
-        error: 'Internal server error',
-        code: 'INTERNAL_ERROR'
-    });
-});
-
-// 404 handler
-app.use('*', (req, res) => {
-    res.status(404).json({
-        success: false,
-        error: 'Endpoint not found',
-        code: 'NOT_FOUND'
-    });
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('SIGTERM received. Shutting down gracefully...');
-    server.close(() => {
-        console.log('Server closed');
-        process.exit(0);
-    });
-});
-
-// Start server
-const server = app.listen(PORT, () => {
-    console.log(`
-    🚀 Cyber Image Generator API
-    ==============================
-    ✅ Server running on port: ${PORT}
-    ✅ Environment: ${process.env.NODE_ENV || 'development'}
-    ✅ Health check: http://localhost:${PORT}/api/health
-    ✅ Frontend URL: ${process.env.FRONTEND_URL || 'Not configured'}
-    ==============================
-    `);
+app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🌐 http://localhost:${PORT}`);
 });

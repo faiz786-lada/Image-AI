@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: cyber-image-api
+    name: cyber-image-generator
     env: node
     buildCommand: npm install
     startCommand: npm start
@@ -11,5 +11,3 @@ services:
         value: 10000
       - key: OPENROUTER_API_KEY
         sync: false
-      - key: FRONTEND_URL
-        value: https://your-frontend-app.vercel.app
